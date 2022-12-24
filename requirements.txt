@@ -1,0 +1,8 @@
+# For usage
+tqdm
+Pillow
+python-rtmidi
+
+# For building/testing
+pytest
+pytest-cov
