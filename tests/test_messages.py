@@ -33,11 +33,25 @@ RANGES_PER_PARAMETER_NAME = {
 def get_possible_values_for_parameter(klass, parameter: inspect.Parameter):
     if parameter.name == "self":
         return None
-    if typing.get_origin(parameter.annotation) is list:
-        if len(typing.get_args(parameter.annotation)) != 1:
+
+    # For testability on Py3.7, before get_origin was introduced:
+    annotation_origin = (
+        typing.get_origin(parameter.annotation)
+        if hasattr(typing, "get_origin")
+        else typing.__origin__
+    )
+
+    if annotation_origin is list:
+        annotation_args = (
+            typing.get_args(parameter.annotation)
+            if hasattr(typing, "get_args")
+            else typing.__args__
+        )
+
+        if len(annotation_args) != 1:
             raise NotImplementedError()
 
-        contained_type = typing.get_args(parameter.annotation)[0]
+        contained_type = annotation_args[0]
 
         return [
             [contained_type(*args)] for args in get_arg_lists_for_klass_constructor(contained_type)
