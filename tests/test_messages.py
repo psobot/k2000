@@ -38,14 +38,14 @@ def get_possible_values_for_parameter(klass, parameter: inspect.Parameter):
     annotation_origin = (
         typing.get_origin(parameter.annotation)
         if hasattr(typing, "get_origin")
-        else typing.__origin__
+        else parameter.annotation.__origin__
     )
 
     if annotation_origin is list:
         annotation_args = (
             typing.get_args(parameter.annotation)
             if hasattr(typing, "get_args")
-            else typing.__args__
+            else parameter.annotation.__args__
         )
 
         if len(annotation_args) != 1:
