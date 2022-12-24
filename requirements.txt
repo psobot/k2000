@@ -2,6 +2,7 @@
 tqdm
 Pillow
 python-rtmidi
+numpy
 
 # For building/testing
 pytest
