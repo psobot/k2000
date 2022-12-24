@@ -1,5 +1,4 @@
 # For usage
-tqdm
 Pillow
 python-rtmidi
 numpy
