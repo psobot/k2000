@@ -30,4 +30,4 @@ jobs:
           flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics --ignore E203,W503
       - name: Test with pytest
         run: |
-          python3 -m pytest tests --cov k2000
+          python3 -m pytest tests --cov k2000 --cov-fail-under=100
