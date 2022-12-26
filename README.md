@@ -6,9 +6,13 @@ A Python package for communicating with the Kurzweil K2000/K2500/K2600 family of
 
 ![Screenshot](https://user-images.githubusercontent.com/213293/209573494-75bc8f4d-0696-4758-a6bb-b4d619a549f9.PNG)
 
+
+To use, just:
 ```
 pip install k2000
 ```
+
+Make sure you're on Python 3.8, 3.9, or 3.10. (Other versions may work too.)
 
 ### _What?_
 
