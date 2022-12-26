@@ -1,6 +1,6 @@
 __author__ = "Peter Sobot"
 
-__version_tuple__ = (0, 1, 1)
+__version_tuple__ = (0, 1, 2)
 __version__ = ".".join([str(x) for x in __version_tuple__])
 
 __email__ = "github@petersobot.com"

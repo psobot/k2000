@@ -3,6 +3,7 @@ from typing import cast, Optional, Iterable, Tuple, Union
 
 import rtmidi
 import numpy as np
+import PIL.Image
 
 from k2000.definitions import ObjectType, Button, ButtonEventType, EncodingFormat, WriteMode
 from k2000.messages import (
@@ -23,6 +24,7 @@ from k2000.messages import (
     DataNotAcknowledged,
     Write,
 )
+from k2000.image import generate_image, upscale_image
 
 
 class K2BaseClient(object):
@@ -71,12 +73,11 @@ class K2BaseClient(object):
             if midi_identifier:
                 matching = f" matching {repr(midi_identifier)}"
             else:
-                matching = ""
+                matching = f", but no midi_identifier was passed to the {self.__class__.__name__} constructor"
             raise RuntimeError(
-                f"More than one bidirectional MIDI interface found{matching}, "
-                f"but no midi_identifier was passed to the {self.__class__.__name__} constructor. "
+                f"More than one bidirectional MIDI interface found{matching}. "
                 f"{'Matching' if midi_identifier else 'Available'} interfaces are: "
-                f"{', '.join(bidirectional_port_names)}"
+                f"{', '.join([repr(x) for x in bidirectional_port_names])}"
             )
 
         self.port_name = port_name
@@ -179,6 +180,13 @@ class K2BaseClient(object):
         Get the current contents of the graphics layer of the screen.
         """
         return cast(ScreenReply, self._send_and_receive(GetGraphics(), timeout)).to_pixel_array()
+
+    def screenshot(self, timeout: float = 1.0) -> PIL.Image:
+        image = generate_image(
+            self.get_graphics(timeout), self.get_screen_text(timeout).split("\n")
+        )
+        image = upscale_image(image, 24).resize((960, 256), PIL.Image.BICUBIC)
+        return image
 
     def get_current_parameter_name(self, timeout: float = 1.0) -> str:
         return str(self._send_and_receive(ParameterName(), timeout))

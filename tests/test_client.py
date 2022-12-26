@@ -1,8 +1,10 @@
 import re
+import os
 import pytest
 import numpy as np
 from typing import Optional
 from unittest.mock import MagicMock, Mock
+import PIL.Image
 
 import rtmidi
 
@@ -377,3 +379,38 @@ def test_object_proxy_write_key_validation(
     proxy = getattr(client, camel2snake(object_type.name) + "s")
     with pytest.raises(exception_type):
         proxy[input] = value
+
+
+def test_screenshot(midi_in, midi_out):
+    PIXEL_TOLERANCE = 0.10 * 255
+    EXPECTED_TEXT_CONTENTS = [
+        "ProgramMode    Xpose:0ST   <>Channel:1  ",
+        "                    998 Choral Sleigh   ",
+        "KeyMap Info         999 Pad Nine        ",
+        " Grand Piano          1 Acoustic Piano  ",
+        " Syn Piano            2 Stage Piano     ",
+        "                      3 BriteGrand      ",
+        "                      4 ClassicPiano&Vox",
+        "Octav- Octav+ Panic  Sample Chan-  Chan+",
+    ]
+    with open(os.path.join(os.path.dirname(__file__), "good_graphics_layer_packed.bin"), "rb") as f:
+        EXPECTED_GRAPHICS_CONTENTS = np.unpackbits(np.frombuffer(f.read(), np.uint8))
+        EXPECTED_GRAPHICS_CONTENTS = EXPECTED_GRAPHICS_CONTENTS.reshape(240, -1)
+    midi_in.get_message = Mock(
+        side_effect=[
+            # Yield ScreenReply messages containing both image data and text data:
+            (ScreenReply.from_pixel_array(EXPECTED_GRAPHICS_CONTENTS).encode(), 0.0),
+            (ScreenReply.from_screen_contents("\n".join(EXPECTED_TEXT_CONTENTS)).encode(), 0.0),
+        ]
+    )
+    client = K2BaseClient(midi_in=midi_in, midi_out=midi_out)
+    image = client.screenshot()
+    assert image is not None
+    expected = PIL.Image.open(os.path.join(os.path.dirname(__file__), "expected_screenshot.png"))
+    assert image.size == expected.size
+    for i, (actual_pixel, expected_pixel) in enumerate(zip(image.getdata(), expected.getdata())):
+        actual_r, actual_g, actual_b = actual_pixel[:3]
+        expected_r, expected_g, expected_b = expected_pixel[:3]
+        assert abs(actual_r - expected_r) < PIXEL_TOLERANCE, f"Red pixel mismatch at index {i}!"
+        assert abs(actual_g - expected_g) < PIXEL_TOLERANCE, f"Green pixel mismatch at index {i}!"
+        assert abs(actual_b - expected_b) < PIXEL_TOLERANCE, f"Blue pixel mismatch at index {i}!"

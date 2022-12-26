@@ -706,7 +706,7 @@ class MoveBank(SysexMessage):
 @define
 class LoadMacro(SysexMessage, EmptyBody):
     """
-    tells K2500 to load in the macro currently in memory.
+    Tells K2500 to load in the macro currently in memory.
     """
 
     _msg_type_int = 0x10
@@ -860,7 +860,7 @@ class ScreenReply(SysexMessage):
             raise TypeError("ScreenReply contains image data and cannot be converted to `str`.")
         else:
             # Probably a variable-length null-terminated ASCII string:
-            return self.data.rstrip(b"\x00").decode("ascii")
+            return bytes(self.data).rstrip(b"\x00").decode("ascii")
 
     def to_pixel_array(self) -> Optional[np.ndarray]:
         if len(self.data) != 2561:
@@ -870,12 +870,12 @@ class ScreenReply(SysexMessage):
 
         pixels = []
         for sixpixels in self.data[:-1]:
-            pixels.append(bool(sixpixels & 0b000001))
-            pixels.append(bool(sixpixels & 0b000010))
-            pixels.append(bool(sixpixels & 0b000100))
-            pixels.append(bool(sixpixels & 0b001000))
-            pixels.append(bool(sixpixels & 0b010000))
             pixels.append(bool(sixpixels & 0b100000))
+            pixels.append(bool(sixpixels & 0b010000))
+            pixels.append(bool(sixpixels & 0b001000))
+            pixels.append(bool(sixpixels & 0b000100))
+            pixels.append(bool(sixpixels & 0b000010))
+            pixels.append(bool(sixpixels & 0b000001))
 
         # TODO: Find a way to do this just with NumPy instead of with `grouper` here!
         return np.array(list(grouper(pixels, self._screen_dims[0]))).astype(np.uint8).T * 0xFF
@@ -904,10 +904,10 @@ class ScreenReply(SysexMessage):
 
         encoded_data = []
         # Pack the pixels in 6 bits at a time:
-        for group in grouper(pixels.flatten(), 6):
+        for group in grouper(pixels.T.flatten(), 6):
             # Convert each element to a single bit:
             # TODO: Must be a more efficient way to do this.
-            binary_string = "".join(["1" if pixel else "0" for pixel in reversed(group)])
+            binary_string = "".join(["1" if pixel else "0" for pixel in group])
             encoded_data.append(bytes([int(binary_string, 2)]))
         return cls(b"".join(encoded_data) + b"\x00")
 
