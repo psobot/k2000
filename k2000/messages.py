@@ -278,6 +278,9 @@ class DataNotAcknowledged(SysexMessage):
         return cls(_type, idno, offset, size, code)
 
 
+Load._response_classes = [DataAcknowledged, DataNotAcknowledged]
+
+
 @define
 class Dir(SysexMessage):
     """
@@ -465,7 +468,7 @@ class Write(SysexMessage):
     """
 
     _msg_type_int = 0x09
-    _response_classes = [Info]
+    _response_classes = [DataAcknowledged, DataNotAcknowledged]
 
     type: ObjectType
     idno: int

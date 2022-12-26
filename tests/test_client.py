@@ -7,7 +7,15 @@ from unittest.mock import MagicMock, Mock
 import rtmidi
 
 from k2000.client import K2BaseClient
-from k2000.messages import Dir, Info, Load, ScreenReply, K2_FOOTER
+from k2000.messages import (
+    Dir,
+    Info,
+    Load,
+    ScreenReply,
+    K2_FOOTER,
+    DataAcknowledged,
+    DataNotAcknowledged,
+)
 from k2000.definitions import ObjectType, Button, EncodingFormat
 
 
@@ -146,7 +154,9 @@ def test_press_button(button: Button, midi_in, midi_out):
 @pytest.mark.parametrize("button", [b for b in Button if "Number" not in b.name])
 def test_press_button_separate_method(button: Button, midi_in, midi_out):
     client = K2BaseClient(midi_in=midi_in, midi_out=midi_out)
-    method_name = camel2snake(button.name.replace("Cursor", "").replace("Soft", ""))
+    method_name = camel2snake(
+        button.name.replace("Cursor", "").replace("Soft", "").replace("Effects", "Effect")
+    )
     assert hasattr(client, method_name)
     getattr(client, method_name)()
 
@@ -214,3 +224,156 @@ def test_dir(midi_in, midi_out):
     received_response = client.dir(ObjectType.Program, 123)
     assert received_response == sent_response
     midi_out.send_message.assert_called_with(b"\xf0\x07\x00x\x04\x01\x04\x00{\xf7")
+
+
+def test_load(midi_in, midi_out):
+    sent_response = DataAcknowledged(ObjectType.Program, 123, 2, 2)
+    midi_in.get_message = Mock(side_effect=[(sent_response.encode(), 0.0)])
+    client = K2BaseClient(midi_in=midi_in, midi_out=midi_out)
+    received_response = client.load(ObjectType.Program, 123, b" " * 2, offset=2)
+    assert received_response == sent_response
+    midi_out.send_message.assert_called_with(
+        b"\xf0\x07\x00x\x01\x01\x04\x00{\x00\x00\x02\x00\x00\x02\x01\x00@ `\xf7"
+    )
+
+
+def test_new(midi_in, midi_out):
+    sent_response = Info(ObjectType.Program, 123, 234, True, "Foo")
+    midi_in.get_message = Mock(side_effect=[(sent_response.encode(), 0.0)])
+    client = K2BaseClient(midi_in=midi_in, midi_out=midi_out)
+    received_response = client.new(ObjectType.Program, 123, 234, create_ram_copy=True, name="Foo")
+    assert received_response == sent_response
+    midi_out.send_message.assert_called_with(
+        b"\xf0\x07\x00x\x06\x01\x04\x00{\x00\x01j\x01Foo\x00\xf7"
+    )
+
+
+def test_write(midi_in, midi_out):
+    sent_response = DataAcknowledged(ObjectType.Program, 123, 0, 4)
+    midi_in.get_message = Mock(side_effect=[(sent_response.encode(), 0.0)])
+    client = K2BaseClient(midi_in=midi_in, midi_out=midi_out)
+    received_response = client.write(ObjectType.Program, 123, "MyProgram", b"1234")
+    assert received_response == sent_response
+    midi_out.send_message.assert_called_with(
+        b"\xf0\x07\x00x\t\x01\x04\x00{\x00\x00\x04\x00MyProgram\x00\x01\x03\tHf4n\xf7"
+    )
+
+
+@pytest.mark.parametrize("object_type", list(ObjectType))
+@pytest.mark.parametrize("method", ["items", "__getitem__", "values"])
+def test_object_proxy_get(object_type: ObjectType, method, midi_in, midi_out):
+    midi_in.get_message = Mock(
+        side_effect=sum(
+            [
+                # Yield Info and Load messages for every object in order:
+                [
+                    (
+                        Info(object_type, idno, idno - 1, False, f"Test Object {idno}").encode(),
+                        0.0,
+                    ),
+                    (
+                        Load(
+                            object_type,
+                            idno,
+                            0,
+                            EncodingFormat.BitStream,
+                            f"Data {idno}".encode("ascii"),
+                        ).encode(),
+                        0.0,
+                    ),
+                ]
+                for idno in range(1, 1000)
+            ],
+            [],
+        )
+    )
+    client = K2BaseClient(midi_in=midi_in, midi_out=midi_out)
+
+    proxy = getattr(client, camel2snake(object_type.name) + "s")
+    assert list(proxy.keys()) == list(range(1, 1000))
+
+    if method == "items":
+        all_items = list(proxy.items())
+        assert len(all_items) == len(proxy.keys())
+    elif method == "__getitem__":
+        all_items = [(i, proxy[i]) for i in proxy.keys()]
+    elif method == "values":
+        all_items = [(i + 1, value) for i, value in enumerate(proxy.values())]
+
+    for i, value in all_items:
+        if i == 1:
+            assert value is None
+        else:
+            name, data = value
+            assert name == f"Test Object {i}"
+            assert data == f"Data {i}".encode("ascii")
+
+
+@pytest.mark.parametrize("object_type", list(ObjectType))
+@pytest.mark.parametrize(
+    "input,exception_type", [("Foobar", TypeError), (1234, ValueError), (-123, ValueError)]
+)
+def test_object_proxy_read_key_validation(
+    object_type: ObjectType, input, exception_type, midi_in, midi_out
+):
+    client = K2BaseClient(midi_in=midi_in, midi_out=midi_out)
+
+    proxy = getattr(client, camel2snake(object_type.name) + "s")
+    with pytest.raises(exception_type):
+        proxy[input]
+
+
+@pytest.mark.parametrize("object_type", list(ObjectType))
+def test_object_proxy_set(object_type: ObjectType, midi_in, midi_out):
+    midi_in.get_message = Mock(
+        side_effect=[
+            # Yield DataAcknowledged messages for every object in order, except the first.
+            (
+                DataAcknowledged(object_type, idno, 0, len(f"Data {idno}".encode("ascii"))).encode()
+                if idno > 1
+                else DataNotAcknowledged(
+                    object_type,
+                    idno,
+                    0,
+                    len(f"Data {idno}".encode("ascii")),
+                    DataNotAcknowledged.ErrorCode.ObjectNotFound,
+                ).encode(),
+                0.0,
+            )
+            for idno in range(1, 1000)
+        ]
+    )
+    client = K2BaseClient(midi_in=midi_in, midi_out=midi_out)
+
+    proxy = getattr(client, camel2snake(object_type.name) + "s")
+    assert list(proxy.keys()) == list(range(1, 1000))
+
+    for i in proxy.keys():
+        if i == 1:
+            with pytest.raises(RuntimeError):
+                proxy[i] = (f"Test Object {i}", f"Data {i}".encode("ascii"))
+        else:
+            proxy[i] = (f"Test Object {i}", f"Data {i}".encode("ascii"))
+
+
+@pytest.mark.parametrize("object_type", list(ObjectType))
+@pytest.mark.parametrize(
+    "input,value,exception_type",
+    [
+        ("Foobar", ("Foo", b"Bar"), TypeError),
+        (1234, ("Foo", b"Bar"), ValueError),
+        (-123, ("Foo", b"Bar"), ValueError),
+        (123, "Foo", TypeError),
+        (123, b"Bar", TypeError),
+        (123, ("Foo", "Bar"), TypeError),
+        (123, (b"Foo", b"Bar"), TypeError),
+    ],
+)
+def test_object_proxy_write_key_validation(
+    object_type: ObjectType, input, value, exception_type, midi_in, midi_out
+):
+    client = K2BaseClient(midi_in=midi_in, midi_out=midi_out)
+
+    proxy = getattr(client, camel2snake(object_type.name) + "s")
+    with pytest.raises(exception_type):
+        proxy[input] = value

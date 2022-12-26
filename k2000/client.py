@@ -1,15 +1,16 @@
 import time
-from typing import cast, Optional, Iterable
+from typing import cast, Optional, Iterable, Tuple, Union
 
 import rtmidi
 import numpy as np
 
-from k2000.definitions import ObjectType, Button, ButtonEventType, EncodingFormat
+from k2000.definitions import ObjectType, Button, ButtonEventType, EncodingFormat, WriteMode
 from k2000.messages import (
     Dump,
     Load,
     Dir,
     Info,
+    New,
     AllText,
     ScreenReply,
     SysexMessage,
@@ -18,6 +19,9 @@ from k2000.messages import (
     ButtonEvent,
     ParameterName,
     ParameterValue,
+    DataAcknowledged,
+    DataNotAcknowledged,
+    Write,
 )
 
 
@@ -123,6 +127,46 @@ class K2BaseClient(object):
             return self.get_screen_text(timeout=0.1) is not None
         except TimeoutError:
             return False
+
+    @property
+    def programs(self):
+        return K2ObjectProxy(self, ObjectType.Program)
+
+    @property
+    def keymaps(self):
+        return K2ObjectProxy(self, ObjectType.Keymap)
+
+    @property
+    def effects(self):
+        return K2ObjectProxy(self, ObjectType.Effect)
+
+    @property
+    def songs(self):
+        return K2ObjectProxy(self, ObjectType.Song)
+
+    @property
+    def setups(self):
+        return K2ObjectProxy(self, ObjectType.Setup)
+
+    @property
+    def soundblocks(self):
+        return K2ObjectProxy(self, ObjectType.Soundblock)
+
+    @property
+    def velocity_maps(self):
+        return K2ObjectProxy(self, ObjectType.VelocityMap)
+
+    @property
+    def pressure_maps(self):
+        return K2ObjectProxy(self, ObjectType.PressureMap)
+
+    @property
+    def quick_access_banks(self):
+        return K2ObjectProxy(self, ObjectType.QuickAccessBank)
+
+    @property
+    def intonation_tables(self):
+        return K2ObjectProxy(self, ObjectType.IntonationTable)
 
     def get_screen_text(self, timeout: float = 1.0) -> str:
         """
@@ -287,7 +331,7 @@ class K2BaseClient(object):
     def quick_access(self):
         self.press_button(Button.QuickAccess)
 
-    def effects(self):
+    def effect(self):
         self.press_button(Button.Effects)
 
     def midi(self):
@@ -303,14 +347,113 @@ class K2BaseClient(object):
         self.press_button(Button.Disk)
 
     def dump(self, type: ObjectType, idno: int, offset: int = 0, size: int = 2**21 - 1) -> Load:
+        """
+        Get the data bytes for an object, identified by type and idno.
+        `offset` and `size` specify the range of data to be fetched, as little as one byte.
+        """
         assert Load in Dump._response_classes
         return cast(
             Load, self._send_and_receive(Dump(type, idno, offset, size, EncodingFormat.BitStream))
         )
 
     def dir(self, type: ObjectType, idno: int) -> Info:
+        """
+        Get the metadata (name, size, and storage) for an object, identified by type and idno.
+        """
         assert Info in Dir._response_classes
         return cast(Info, self._send_and_receive(Dir(type, idno)))
+
+    def load(
+        self, type: ObjectType, idno: int, data: bytes, offset: int = 0
+    ) -> Union[DataAcknowledged, DataNotAcknowledged]:
+        """
+        Set the data bytes for an existing object, identified by type and idno.
+        """
+        return self._send_and_receive(Load(type, idno, offset, EncodingFormat.BitStream, data))
+
+    def new(self, type: ObjectType, idno: int, size: int, create_ram_copy: bool, name: str) -> Info:
+        """
+        Create a new object.
+
+        The object's data will not be initialized to any default values.
+
+        If 'idno' is zero, the first available object ID number will be assigned.
+        If 'create_ram_copy' is False, the request will fail if the object exists.
+        If 'create_ram_copy' is True, and the object exists in ROM, a RAM copy will be made.
+        If 'create_ram_copy' is True, and the object exists in RAM, no action is taken.
+        """
+        return cast(Info, self._send_and_receive(New(type, idno, size, create_ram_copy, name)))
+
+    def write(
+        self, type: ObjectType, idno: int, name: str, data: bytes
+    ) -> Union[DataAcknowledged, DataNotAcknowledged]:
+        """
+        Write an entire object's data directly into the database.
+
+        This method first deletes any object already existing at the same
+        type/ID. If no RAM object currently exists there, a new
+        one will be allocated and the data will be written into it.
+
+        The object name will be set if the 'name' string is non-null.
+        """
+        return self._send_and_receive(
+            Write(type, idno, WriteMode.WriteToExactIDNumber, name, EncodingFormat.BitStream, data)
+        )
+
+
+class K2ObjectProxy:
+    """
+    A proxy object that acts like a list (or dict with keys).
+    """
+
+    def __init__(self, client: K2BaseClient, type: ObjectType):
+        self.client = client
+        self.type = type
+
+    def __getitem__(self, key: int) -> Optional[Tuple[str, bytes]]:
+        if not isinstance(key, int):
+            raise TypeError("Key must be an integer!")
+
+        if key > 1000 or key < 1:
+            raise ValueError("ID number must be between 1 and 999, inclusive.")
+
+        info = self.client.dir(self.type, key)
+        if info.size != 0:
+            load = self.client.dump(self.type, key)
+            return (info.name, load.data)
+        return None
+
+    def __setitem__(self, key: int, value: Tuple[str, bytes]):
+        if not isinstance(key, int):
+            raise TypeError("Key must be an integer!")
+
+        if key > 1000 or key < 1:
+            raise ValueError("ID number must be between 1 and 999, inclusive.")
+
+        if (
+            not isinstance(value, tuple)
+            or len(value) != 2
+            or not isinstance(value[0], str)
+            or not isinstance(value[1], bytes)
+        ):
+            raise TypeError("Value must be a tuple of (name: str, data: bytes).")
+
+        name, data = value
+
+        response = self.client.write(self.type, key, name, data)
+        if isinstance(response, DataNotAcknowledged):
+            raise RuntimeError(f"Could not set {self.type} ID {key}: {response.code.name}")
+
+    def items(self) -> Iterable[Tuple[int, Optional[Tuple[str, bytes]]]]:
+        for idno in self.keys():
+            yield idno, self[idno]
+
+    def keys(self) -> Iterable[int]:
+        return range(1, 1000)
+
+    def values(self) -> Iterable[Optional[Tuple[str, bytes]]]:
+        for _, value in self.items():
+            yield value
 
 
 class K2000Client(K2BaseClient):
